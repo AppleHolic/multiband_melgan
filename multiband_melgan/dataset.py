@@ -23,13 +23,16 @@ class AudioDataset(Dataset):
         wav, _ = librosa.load(file_path, sr=None)
 
         # random crop
-        rand_start = np.random.randint((len(wav) - self.crop_length))
+        rand_start = np.random.randint(0, (len(wav) - self.crop_length))
         cropped_wav = wav[rand_start:rand_start + self.crop_length]
 
         # make mask
         wav_mask = np.ones_like(cropped_wav)
 
-        return wav, wav_mask
+        return cropped_wav, wav_mask
+
+    def __len__(self):
+        return len(self.meta_frame)
 
 
 def get_datasets(meta_dir: str, batch_size: int, num_workers: int, crop_length: int, random_seed: int

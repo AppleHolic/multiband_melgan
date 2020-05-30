@@ -2,14 +2,12 @@ import torch
 import torch.nn as nn
 from torch.nn.utils import weight_norm
 from pytorch_sound.models import register_model, register_model_architecture
+from typing import List
 
 
 #
 # Make blocks
 #
-from typing import List
-
-
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find("Conv") != -1:
@@ -57,16 +55,12 @@ class Generator(nn.Module):
             WNConv1d(mel_dim, dim, kernel_size=7, padding=0)
         )
 
-        dim //= 2
-
         # body
         self.res_stack = nn.ModuleList()
         self.res_params = res_kernels
         res_dilations = [3 ** idx for idx in range(4)]
 
-        for idx, res_param in enumerate(self.res_params):
-            ratio = res_param[0]
-
+        for idx, ratio in enumerate(self.res_params):
             stack = nn.Sequential(
                 nn.LeakyReLU(0.2),
                 WNConvTranspose1d(
@@ -100,56 +94,77 @@ class Generator(nn.Module):
         return self.out(x)
 
 
+class DiscriminatorBlock(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.module_list = nn.ModuleList([
+            nn.Sequential(
+                WNConv1d(1, 16, 15, padding=7),
+                nn.LeakyReLU(0.2)
+            ),
+            nn.Sequential(
+                WNConv1d(16, 64, 41, stride=4, groups=4, padding=4 * 5),
+                nn.LeakyReLU(0.2)
+            ),
+            nn.Sequential(
+                WNConv1d(64, 256, 41, stride=4, groups=16, padding=4 * 5),
+                nn.LeakyReLU(0.2)
+            ),
+            nn.Sequential(
+                WNConv1d(256, 512, 41, stride=4, groups=64, padding=4 * 5),
+                nn.LeakyReLU(0.2)
+            ),
+            nn.Sequential(
+                WNConv1d(512, 512, 5, padding=2),
+                nn.LeakyReLU(0.2)
+            ),
+            WNConv1d(512, 1, 3, padding=1)
+        ])
+
+    def forward(self, x):
+        results = []
+        for module in self.module_list:
+            x = module(x)
+            results.append(x)
+        return results
+
+
 @register_model('discriminator')
 class Discriminator(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.in_conv = nn.Sequential(
-            WNConv1d(1, 16, 15),
-            nn.LeakyReLU(0.2)
-        )
+        self.blocks = nn.ModuleList([DiscriminatorBlock()] * 3)
+        self.downsample = nn.AvgPool1d(4, stride=2, padding=1, count_include_pad=False)
 
-        self.first = nn.Sequential(
-            WNConv1d(16, 64, 41, stride=4, groups=4, padding=4 * 5),
-            nn.LeakyReLU(0.2)
-        )
-
-        self.second = nn.Sequential(
-            WNConv1d(64, 256, 41, stride=4, groups=16, padding=4 * 5),
-            nn.LeakyReLU(0.2)
-        )
-
-        self.third = nn.Sequential(
-            WNConv1d(256, 512, 41, stride=4, groups=64, padding=4 * 5),
-            nn.LeakyReLU(0.2)
-        )
-
-        self.gate = nn.Sequential(
-            WNConv1d(512, 512, 5),
-            nn.LeakyReLU(0.2)
-        )
-
-        self.out = WNConv1d(512, 1, 3, padding=1)
-
-    def forward(self, x: torch.Tensor):
-        x1 = self.in_conv(x)
-        x2 = self.first(x1)
-        x3 = self.second(x2)
-        x4 = self.third(x3)
-        x5 = self.gate(x4)
-        x6 = self.out(x5)
-        return x1, x2, x3, x4, x5, x6
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        results = []
+        for idx, block in enumerate(self.blocks):
+            results.extend(block(x))
+            if idx < len(self.blocks) - 1:
+                x = self.downsample(x)
+        return results
 
 
 # mel_dim: int, dim: int, out_dim: int, res_kernels
+# @register_model_architecture('generator', 'generator_mb')
+# def generator_mb():
+#     return {
+#         'mel_dim': 80,
+#         'dim': 384,
+#         'out_dim': 4,
+#         'res_kernels': [2, 5, 5]
+#     }
+
+
 @register_model_architecture('generator', 'generator_mb')
 def generator_mb():
     return {
         'mel_dim': 80,
         'dim': 384,
         'out_dim': 4,
-        'res_kernels': [2, 5, 5]
+        'res_kernels': [4, 4, 4]
     }
 
 
