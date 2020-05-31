@@ -71,13 +71,15 @@ def main(meta_dir: str, save_dir: str,
         chk = torch.load(pretrained_path)
         gen_chk, dis_chk = chk['generator'], chk['discriminator']
         gen_opt_chk, dis_opt_chk = chk['gen_opt'], chk['dis_opt']
-        initial_step = chk['step']
+        initial_step = int(chk['step'])
         l = chk['loss']
 
         mb_generator.load_state_dict(gen_chk)
         discriminator.load_state_dict(dis_chk)
         mb_opt.load_state_dict(gen_opt_chk)
         dis_opt.load_state_dict(dis_opt_chk)
+        mb_scheduler._step_count = initial_step
+        dis_scheduler._step_count = initial_step
         best_loss = l
 
     #
@@ -207,10 +209,6 @@ def main(meta_dir: str, save_dir: str,
     best_loss = np.finfo(np.float32).max
 
     for step in range(max(pretrain_step, initial_step), max_step):
-        # zero grad
-        mb_opt.zero_grad()
-        dis_opt.zero_grad()
-
         # data
         wav, _ = next(train_loader)
         wav = wav.cuda()
@@ -240,14 +238,10 @@ def main(meta_dir: str, save_dir: str,
         d_fake_det = discriminator(pred.detach())
         d_real = discriminator(wav.unsqueeze(1))
 
-        loss_D = 0
-        for idx in range(dis_block_layers - 1, len(d_fake_det), dis_block_layers):
-            loss_D += torch.mean(d_fake_det[idx] ** 2)
-
-        for idx in range(dis_block_layers - 1, len(d_real), dis_block_layers):
-            loss_D += torch.mean((d_real[idx] - 1) ** 2)
+        loss_D = torch.mean(d_fake_det[-1] ** 2) + torch.mean((d_real[-1] - 1) ** 2)
 
         # train
+        discriminator.zero_grad()
         loss_D.backward()
         dis_opt.step()
         dis_scheduler.step()
@@ -268,10 +262,11 @@ def main(meta_dir: str, save_dir: str,
         stft_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
         loss_G += stft_loss
 
+        mb_generator.zero_grad()
         loss_G.backward()
         mb_opt.step()
         mb_scheduler.step()
-        mb_generator.zero_grad()
+
 
         #
         # logging! save!
