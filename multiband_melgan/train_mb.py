@@ -14,18 +14,17 @@ from torch.optim.lr_scheduler import MultiStepLR
 from pytorch_sound.models import build_model
 from pytorch_sound import settings
 from pytorch_sound.models.transforms import PQMF
-from pytorch_sound.utils.commons import get_loadable_checkpoint, log
+from pytorch_sound.utils.commons import log
 from multiband_melgan.dataset import get_datasets
 from multiband_melgan.utils import repeat
 
 
 def main(meta_dir: str, save_dir: str,
          save_prefix: str, pretrained_path: str = '',
-         mb_batch_size: int = 32, num_workers: int = 8,
+         batch_size: int = 32, num_workers: int = 8,
          lr: float = 1e-4, betas: Tuple[float] = (0.5, 0.9), weight_decay: float = 0.0, pretrain_step: int = 200000,
-         max_step: int = 2000000, valid_max_step: int = 100, save_interval: int = 10000,
-         log_scala_interval: int = 1, log_heavy_interval: int = 100,
-         grad_norm: float = 10.0,
+         max_step: int = 2000000, save_interval: int = 10000,
+         log_scala_interval: int = 20, log_heavy_interval: int = 1000,
          gamma: float = 0.5, seed: int = 1234):
     #
     # prepare training
@@ -46,12 +45,11 @@ def main(meta_dir: str, save_dir: str,
 
     # get datasets
     train_loader, valid_loader = get_datasets(
-        meta_dir, batch_size=mb_batch_size, num_workers=num_workers, crop_length=settings.SAMPLE_RATE, random_seed=seed
+        meta_dir, batch_size=batch_size, num_workers=num_workers, crop_length=settings.SAMPLE_RATE, random_seed=seed
     )
 
     # repeat
     train_loader = repeat(train_loader)
-    valid_loader = repeat(valid_loader)
 
     # build mel function
     mel_func, stft_funcs_for_loss = build_mel_functions()
@@ -135,23 +133,78 @@ def main(meta_dir: str, save_dir: str,
             msg = f'train: step: {step} / loss: {loss.item()} / mb_loss: {mb_loss.item()} / fb_loss: {fb_loss.item()}'
             log(msg)
 
-        if step % save_interval == 0:
-            l = loss.item()
-            is_best = l < best_loss
+        if step % save_interval == 0 and step > 0:
+            #
+            # Validation Step !
+            #
+            valid_loss = 0.
+            valid_mb_loss, valid_fb_loss = 0., 0.
+            count = 0
+            mb_generator.eval()
+
+            for idx, (wav, _) in enumerate(valid_loader):
+                # setup data
+                wav = wav.cuda()
+                mel = norm_mel(mel_func(wav))
+
+                with torch.no_grad():
+                    # pqmf
+                    target_subbands = pqmf_func.analysis(wav.unsqueeze(1))  # N, SUBBAND, T
+
+                    # forward
+                    pred_subbands = mb_generator(mel)
+                    pred_subbands, _ = match_dim(pred_subbands, target_subbands)
+
+                    # pqmf synthesis
+                    pred = pqmf_func.synthesis(pred_subbands)
+                    pred, wav = match_dim(pred, wav)
+
+                    # get stft loss
+                    loss, mb_loss, fb_loss = get_stft_loss(
+                        pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss
+                    )
+
+                valid_loss += loss.item()
+                valid_mb_loss += mb_loss.item()
+                valid_fb_loss += fb_loss.item()
+                count = idx
+
+            valid_loss /= (count + 1)
+            valid_mb_loss /= (count + 1)
+            valid_fb_loss /= (count + 1)
+            mb_generator.train()
+
+            # log validation
+            # log writer
+            pred_audio = pred[0, 0]
+            target_audio = wav[0]
+            writer.add_scalar('valid/pretrain_loss', valid_loss, global_step=step)
+            writer.add_scalar('valid/mb_loss', valid_mb_loss, global_step=step)
+            writer.add_scalar('valid/fb_loss', valid_fb_loss, global_step=step)
+            writer.add_audio('valid/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+            writer.add_audio('valid/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+
+            # console
+            log(f'---- Valid loss: {valid_loss} / mb_loss: {valid_mb_loss} / fb_loss: {valid_fb_loss} ----')
+
+            #
+            # save checkpoint
+            #
+            is_best = valid_loss < best_loss
             if is_best:
-                best_loss = l
+                best_loss = valid_loss
             save_checkpoint(
                 mb_generator, discriminator,
                 mb_opt, dis_opt,
-                model_dir, step, loss.item(), is_best=is_best
+                model_dir, step, valid_loss, is_best=is_best
             )
 
     #
     # Train GAN
     #
     dis_block_layers = 6
-    dis_numb = 3
-    lambda_gen, lambda_feat = 2.5, 10.
+    lambda_gen = 2.5
+    best_loss = np.finfo(np.float32).max
 
     for step in range(max(pretrain_step, initial_step), max_step):
         # zero grad
@@ -189,10 +242,10 @@ def main(meta_dir: str, save_dir: str,
 
         loss_D = 0
         for idx in range(dis_block_layers - 1, len(d_fake_det), dis_block_layers):
-            loss_D += torch.mean((d_fake_det[idx] - 1) ** 2)
+            loss_D += torch.mean(d_fake_det[idx] ** 2)
 
         for idx in range(dis_block_layers - 1, len(d_real), dis_block_layers):
-            loss_D += torch.mean(d_real[idx] ** 2)
+            loss_D += torch.mean((d_real[idx] - 1) ** 2)
 
         # train
         loss_D.backward()
@@ -207,28 +260,15 @@ def main(meta_dir: str, save_dir: str,
         # calc generator loss
         loss_G = 0
         for idx in range(dis_block_layers - 1, len(d_fake), dis_block_layers):
-            loss_G += ((d_fake[idx] - 1) ** 2)
+            loss_G += ((d_fake[idx] - 1) ** 2).mean()
 
-        loss_G = (lambda_gen * loss_G).mean()
+        loss_G *= lambda_gen
 
         # get stft loss
         stft_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
         loss_G += stft_loss
 
-
-        #
-        # Feature loss
-        # calc weight
-        feat_weights = 4.0 / (dis_block_layers + 1)
-        d_weights = 1.0 / dis_numb
-        wt = d_weights * feat_weights
-        loss_feat = 0.
-
-        for fake, real in zip(d_fake, d_real):
-            loss_feat += wt * (real.detach() - fake).norm(p=1, dim=1).norm(p=1, dim=1).mean()
-
-        final_loss = loss_G + lambda_feat * loss_feat
-        final_loss.backward()
+        loss_G.backward()
         mb_opt.step()
         mb_scheduler.step()
         mb_generator.zero_grad()
@@ -240,30 +280,115 @@ def main(meta_dir: str, save_dir: str,
             # log writer
             pred_audio = pred[0, 0]
             target_audio = wav[0]
-            writer.add_scalar('train/final_loss', final_loss.item(), global_step=step)
             writer.add_scalar('train/loss_G', loss_G.item(), global_step=step)
             writer.add_scalar('train/loss_D', loss_D.item(), global_step=step)
-            writer.add_scalar('train/loss_feat', loss_feat.item(), global_step=step)
             writer.add_scalar('train/mel_err', mel_err, global_step=step)
             if step % log_heavy_interval == 0:
                 writer.add_audio('train/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
                 writer.add_audio('train/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
 
             # console
-            msg = f'train: step: {step} / final_loss: {final_loss.item()} / ' \
-                f'loss_G: {loss_G.item()} / loss_D: {loss_D.item()} / ' \
-                f'loss_feat: {loss_feat.item()} / mel_err: {mel_err}'
+            msg = f'train: step: {step} / loss_G: {loss_G.item()} / loss_D: {loss_D.item()} / ' \
+                f' mel_err: {mel_err}'
             log(msg)
 
-        if step % save_interval == 0:
-            l = final_loss.item()
-            is_best = l < best_loss
+        if step % save_interval == 0 and step > 0:
+            #
+            # Validation Step !
+            #
+            valid_g_loss, valid_d_loss, valid_mel_loss = 0., 0., 0.
+            count = 0
+            mb_generator.eval()
+            discriminator.eval()
+
+            for idx, (wav, _) in enumerate(valid_loader):
+                # setup data
+                wav = wav.cuda()
+                mel = norm_mel(mel_func(wav))
+
+                with torch.no_grad():
+                    # pqmf
+                    target_subbands = pqmf_func.analysis(wav.unsqueeze(1))  # N, SUBBAND, T
+
+                    # Discriminator
+                    pred_subbands = mb_generator(mel)
+                    pred_subbands, _ = match_dim(pred_subbands, target_subbands)
+
+                    # pqmf synthesis
+                    pred = pqmf_func.synthesis(pred_subbands)
+                    pred, wav = match_dim(pred, wav)
+
+                    # Mel Error
+                    pred_mel = norm_mel(mel_func(pred.squeeze(1).detach()))
+                    mel_err = F.l1_loss(mel, pred_mel).item()
+
+                    #
+                    # discriminator part
+                    #
+                    d_fake_det = discriminator(pred.detach())
+                    d_real = discriminator(wav.unsqueeze(1))
+
+                    loss_D = 0
+                    for idx in range(dis_block_layers - 1, len(d_fake_det), dis_block_layers):
+                        loss_D += torch.mean((d_fake_det[idx] - 1) ** 2)
+
+                    for idx in range(dis_block_layers - 1, len(d_real), dis_block_layers):
+                        loss_D += torch.mean(d_real[idx] ** 2)
+
+                    #
+                    # generator part
+                    #
+                    d_fake = discriminator(pred)
+
+                    # calc generator loss
+                    loss_G = 0
+                    for idx in range(dis_block_layers - 1, len(d_fake), dis_block_layers):
+                        loss_G += ((d_fake[idx] - 1) ** 2).mean()
+
+                    loss_G *= lambda_gen
+
+                    # get stft loss
+                    stft_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
+                    loss_G += stft_loss
+
+                valid_d_loss += loss_D.item()
+                valid_g_loss += loss_G.item()
+                valid_mel_loss += mel_err
+                count = idx
+
+            valid_d_loss /= (count + 1)
+            valid_g_loss /= (count + 1)
+            valid_mel_loss /= (count + 1)
+
+            mb_generator.train()
+            discriminator.train()
+
+            # log validation
+            # log writer
+            pred_audio = pred[0, 0]
+            target_audio = wav[0]
+            writer.add_scalar('valid/loss_G', valid_g_loss, global_step=step)
+            writer.add_scalar('valid/loss_D', valid_d_loss, global_step=step)
+            writer.add_scalar('valid/mel_err', valid_mel_loss, global_step=step)
+            if step % log_heavy_interval == 0:
+                writer.add_audio('valid/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+                writer.add_audio('valid/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+
+            # console
+            log(
+                f'---- loss_G: {valid_g_loss} / loss_D: {valid_d_loss} / mel loss : {valid_mel_loss} ----'
+            )
+
+            #
+            # save checkpoint
+            #
+            is_best = valid_g_loss < best_loss
             if is_best:
-                best_loss = l
+                best_loss = valid_g_loss
             save_checkpoint(
                 mb_generator, discriminator,
                 mb_opt, dis_opt,
-                model_dir, step, loss.item(), is_best=is_best
+                model_dir, step, valid_g_loss, is_best=is_best
             )
 
     log('----- Finish ! -----')
