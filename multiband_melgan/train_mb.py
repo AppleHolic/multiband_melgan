@@ -60,17 +60,33 @@ def main(meta_dir: str, save_dir: str,
     pqmf_func = PQMF().cuda()
 
     # prepare logging
-    writer, generator_dir, disc_dir = prepare_logging(save_dir, save_prefix)
+    writer, model_dir = prepare_logging(save_dir, save_prefix)
 
     # Training Saving Attributes
     best_loss = np.finfo(np.float32).max
     best_step = 0
+    initial_step = 0
+
+    # load model
+    if pretrained_path:
+        log(f'Pretrained path is given : {pretrained_path} . Loading...')
+        chk = torch.load(pretrained_path)
+        gen_chk, dis_chk = chk['generator'], chk['discriminator']
+        gen_opt_chk, dis_opt_chk = chk['gen_opt'], chk['dis_opt']
+        initial_step = chk['step']
+        l = chk['loss']
+
+        mb_generator.load_state_dict(gen_chk)
+        discriminator.load_state_dict(dis_chk)
+        mb_opt.load_state_dict(gen_opt_chk)
+        dis_opt.load_state_dict(dis_opt_chk)
+        best_loss = l
 
     #
     # Training !
     #
     # Pretraining generator
-    for step in range(pretrain_step):
+    for step in range(initial_step, pretrain_step):
         # data
         wav, _ = next(train_loader)
         wav = wav.cuda()
@@ -94,11 +110,6 @@ def main(meta_dir: str, save_dir: str,
 
         # backward and update
         loss.backward()
-        if any([p.grad.sum() != p.grad.sum() for p in mb_generator.parameters() if p.requires_grad]):
-            log(f'loss is NAN on step : {step} continue')
-            mb_opt.zero_grad()
-            mb_generator.zero_grad()
-            continue
         mb_opt.step()
         mb_scheduler.step()
 
@@ -129,7 +140,11 @@ def main(meta_dir: str, save_dir: str,
             is_best = l < best_loss
             if is_best:
                 best_loss = l
-            save_checkpoint(mb_generator, mb_opt, generator_dir, step, loss.item(), is_best=is_best)
+            save_checkpoint(
+                mb_generator, discriminator,
+                mb_opt, dis_opt,
+                model_dir, step, loss.item(), is_best=is_best
+            )
 
     #
     # Train GAN
@@ -138,7 +153,7 @@ def main(meta_dir: str, save_dir: str,
     dis_numb = 3
     lambda_gen, lambda_feat = 2.5, 10.
 
-    for step in range(pretrain_step, max_step):
+    for step in range(max(pretrain_step, initial_step), max_step):
         # zero grad
         mb_opt.zero_grad()
         dis_opt.zero_grad()
@@ -189,25 +204,31 @@ def main(meta_dir: str, save_dir: str,
         #
         d_fake = discriminator(pred)
 
+        # calc generator loss
         loss_G = 0
         for idx in range(dis_block_layers - 1, len(d_fake), dis_block_layers):
-            loss_G += ((d_fake[idx] - 1) ** 2).sum(-1).mean()
+            loss_G += ((d_fake[idx] - 1) ** 2)
+
+        loss_G = (lambda_gen * loss_G).mean()
 
         # get stft loss
-        stft_loss, _, _ = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)
+        stft_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
         loss_G += stft_loss
 
-        loss_feat = 0.
+
+        #
+        # Feature loss
+        # calc weight
         feat_weights = 4.0 / (dis_block_layers + 1)
         d_weights = 1.0 / dis_numb
         wt = d_weights * feat_weights
+        loss_feat = 0.
 
         for fake, real in zip(d_fake, d_real):
-            loss_feat += wt * torch.norm((real.detach() - fake), p=1)
+            loss_feat += wt * (real.detach() - fake).norm(p=1, dim=1).norm(p=1, dim=1).mean()
 
-        final_loss = lambda_gen * loss_G + lambda_feat * loss_feat
+        final_loss = loss_G + lambda_feat * loss_feat
         final_loss.backward()
-        # torch.nn.utils.clip_grad_norm_([p for p in mb_generator.parameters() if p.requires_grad], grad_norm)
         mb_opt.step()
         mb_scheduler.step()
         mb_generator.zero_grad()
@@ -239,8 +260,11 @@ def main(meta_dir: str, save_dir: str,
             is_best = l < best_loss
             if is_best:
                 best_loss = l
-            save_checkpoint(mb_generator, mb_opt, generator_dir, step, l, is_best=is_best)
-            save_checkpoint(discriminator, dis_opt, disc_dir, step, l, is_best=is_best)
+            save_checkpoint(
+                mb_generator, discriminator,
+                mb_opt, dis_opt,
+                model_dir, step, loss.item(), is_best=is_best
+            )
 
     log('----- Finish ! -----')
 
@@ -331,25 +355,29 @@ def setup_seed(seed: int):
 def prepare_logging(save_dir: str, save_prefix: str):
     # prepare directories
     log_dir = os.path.join(save_dir, 'logs', save_prefix)
-    generator_dir = os.path.join(save_dir, 'generator')
-    disc_dir = os.path.join(save_dir, 'discriminator')
+    model_dir = os.path.join(save_dir, 'models', save_prefix)
 
-    os.makedirs(generator_dir, exist_ok=True)
-    os.makedirs(disc_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
     # make writer
     writer = SummaryWriter(log_dir=log_dir, flush_secs=10)
-    return writer, generator_dir, disc_dir
+    return writer, model_dir
 
 
-def save_checkpoint(model, optimizer, out_dir: str, step: int, loss: float, is_best: bool = False):
+def save_checkpoint(
+        generator, discriminator,
+        gen_opt, dis_opt,
+        out_dir: str, step: int, loss: float, is_best: bool = False
+    ):
     # file path
-    model_path = os.path.join(out_dir, f'model_{step}.pt')
+    model_path = os.path.join(out_dir, f'models_{step}.pt')
 
     chk = {
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
+        'generator': generator.state_dict(),
+        'discriminator': discriminator.state_dict(),
+        'gen_opt': gen_opt.state_dict(),
+        'dis_opt': dis_opt.state_dict(),
         'step': step,
         'loss': loss
     }
@@ -357,7 +385,7 @@ def save_checkpoint(model, optimizer, out_dir: str, step: int, loss: float, is_b
     torch.save(chk, model_path)
 
     if is_best:
-        best_path = os.path.join(out_dir, 'model_best.pt')
+        best_path = os.path.join(out_dir, 'models_best.pt')
         os.system(f'cp {model_path} {best_path}')
 
 
