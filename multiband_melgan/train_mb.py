@@ -22,8 +22,9 @@ from multiband_melgan.utils import repeat
 def main(meta_dir: str, save_dir: str,
          save_prefix: str, pretrained_path: str = '',
          batch_size: int = 32, num_workers: int = 8,
-         lr: float = 1e-4, betas: Tuple[float] = (0.5, 0.9), weight_decay: float = 0.0, pretrain_step: int = 200000,
-         max_step: int = 2000000, save_interval: int = 10000,
+         lr: float = 1e-4, betas: Tuple[float] = (0.5, 0.9), weight_decay: float = 0.0,
+         pretrain_step: int = 200000, terminate_step: int = 500000,
+         max_step: int = 1000000, save_interval: int = 10000,
          log_scala_interval: int = 20, log_heavy_interval: int = 1000,
          gamma: float = 0.5, seed: int = 1234):
     #
@@ -235,16 +236,17 @@ def main(meta_dir: str, save_dir: str,
             pred_mel = norm_mel(mel_func(pred.squeeze(1).detach()))
             mel_err = F.l1_loss(mel, pred_mel).item()
 
-        d_fake_det = discriminator(pred.detach())
-        d_real = discriminator(wav.unsqueeze(1))
+        if terminate_step > step:
+            d_fake_det = discriminator(pred.detach())
+            d_real = discriminator(wav.unsqueeze(1))
 
-        loss_D = torch.mean(d_fake_det[-1] ** 2) + torch.mean((d_real[-1] - 1) ** 2)
+            loss_D = torch.mean(d_fake_det[-1] ** 2) + torch.mean((d_real[-1] - 1) ** 2)
 
-        # train
-        discriminator.zero_grad()
-        loss_D.backward()
-        dis_opt.step()
-        dis_scheduler.step()
+            # train
+            discriminator.zero_grad()
+            loss_D.backward()
+            dis_opt.step()
+            dis_scheduler.step()
 
         #
         # Train Generator
