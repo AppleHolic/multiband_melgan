@@ -4,26 +4,29 @@ import torch
 import os
 import numpy as np
 import torch.nn.functional as F
+
 from multiband_melgan import models
+from multiband_melgan.dataset import get_datasets
+from multiband_melgan.utils import repeat
 
 from typing import Tuple
 from pytorch_sound.models.transforms import LogMelSpectrogram, STFTTorchAudio
 from pytorch_sound.utils.calculate import norm_mel
-from tensorboardX import SummaryWriter
-from torch.optim.lr_scheduler import MultiStepLR
+from pytorch_sound.utils.plots import imshow_to_buf
+
 from pytorch_sound.models import build_model
 from pytorch_sound import settings
 from pytorch_sound.models.transforms import PQMF
 from pytorch_sound.utils.commons import log
-from multiband_melgan.dataset import get_datasets
-from multiband_melgan.utils import repeat
+from tensorboardX import SummaryWriter
+from torch.optim.lr_scheduler import MultiStepLR
 
 
 def main(meta_dir: str, save_dir: str,
          save_prefix: str, pretrained_path: str = '',
          batch_size: int = 32, num_workers: int = 8,
-         lr: float = 1e-4, betas: Tuple[float] = (0.5, 0.9), weight_decay: float = 0.0,
-         pretrain_step: int = 200000, terminate_step: int = 500000,
+         lr: float = 1e-4, betas: Tuple[float, float] = (0.5, 0.9), weight_decay: float = 0.0,
+         pretrain_step: int = 200000,
          max_step: int = 1000000, save_interval: int = 10000,
          log_scala_interval: int = 20, log_heavy_interval: int = 1000,
          gamma: float = 0.5, seed: int = 1234):
@@ -53,7 +56,7 @@ def main(meta_dir: str, save_dir: str,
     train_loader = repeat(train_loader)
 
     # build mel function
-    mel_func, stft_funcs_for_loss = build_mel_functions()
+    mel_func, stft_funcs_for_loss = build_stft_functions()
 
     # build pqmf
     pqmf_func = PQMF().cuda()
@@ -63,7 +66,6 @@ def main(meta_dir: str, save_dir: str,
 
     # Training Saving Attributes
     best_loss = np.finfo(np.float32).max
-    best_step = 0
     initial_step = 0
 
     # load model
@@ -79,8 +81,19 @@ def main(meta_dir: str, save_dir: str,
         discriminator.load_state_dict(dis_chk)
         mb_opt.load_state_dict(gen_opt_chk)
         dis_opt.load_state_dict(dis_opt_chk)
+        if 'dis_scheduler' in chk:
+            dis_scheduler_chk = chk['dis_scheduler']
+            gen_scheduler_chk = chk['gen_scheduler']
+            mb_scheduler.load_state_dict(gen_scheduler_chk)
+            dis_scheduler.load_state_dict(dis_scheduler_chk)
+
+        mb_opt._step_count = initial_step
         mb_scheduler._step_count = initial_step
-        dis_scheduler._step_count = initial_step
+        dis_opt._step_count = initial_step - pretrain_step
+        dis_scheduler._step_count = initial_step - pretrain_step
+
+        mb_scheduler.step(initial_step)
+        dis_scheduler.step(initial_step - pretrain_step)
         best_loss = l
 
     #
@@ -106,7 +119,7 @@ def main(meta_dir: str, save_dir: str,
         pred = pqmf_func.synthesis(pred_subbands)
         pred, wav = match_dim(pred, wav)
 
-        # get stft loss
+        # get multi-resolution stft loss   eq 9)
         loss, mb_loss, fb_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)
 
         # backward and update
@@ -199,6 +212,7 @@ def main(meta_dir: str, save_dir: str,
             save_checkpoint(
                 mb_generator, discriminator,
                 mb_opt, dis_opt,
+                mb_scheduler, dis_scheduler,
                 model_dir, step, valid_loss, is_best=is_best
             )
 
@@ -210,6 +224,7 @@ def main(meta_dir: str, save_dir: str,
     best_loss = np.finfo(np.float32).max
 
     for step in range(max(pretrain_step, initial_step), max_step):
+
         # data
         wav, _ = next(train_loader)
         wav = wav.cuda()
@@ -236,39 +251,44 @@ def main(meta_dir: str, save_dir: str,
             pred_mel = norm_mel(mel_func(pred.squeeze(1).detach()))
             mel_err = F.l1_loss(mel, pred_mel).item()
 
-        if terminate_step > step:
-            d_fake_det = discriminator(pred.detach())
-            d_real = discriminator(wav.unsqueeze(1))
+        # if terminate_step > step:
+        d_fake_det = discriminator(pred.detach())
+        d_real = discriminator(wav.unsqueeze(1))
 
-            loss_D = torch.mean(d_fake_det[-1] ** 2) + torch.mean((d_real[-1] - 1) ** 2)
+        # calculate discriminator losses  eq 1)
+        loss_D = 0
 
-            # train
-            discriminator.zero_grad()
-            loss_D.backward()
-            dis_opt.step()
-            dis_scheduler.step()
+        for idx in range(dis_block_layers - 1, len(d_fake_det), dis_block_layers):
+            loss_D += torch.mean((d_fake_det[idx] - 1) ** 2)
+
+        for idx in range(dis_block_layers - 1, len(d_real), dis_block_layers):
+            loss_D += torch.mean(d_real[idx] ** 2)
+
+        # train
+        discriminator.zero_grad()
+        loss_D.backward()
+        dis_opt.step()
+        dis_scheduler.step()
 
         #
         # Train Generator
         #
         d_fake = discriminator(pred)
 
-        # calc generator loss
+        # calc generator loss   eq 8)
         loss_G = 0
         for idx in range(dis_block_layers - 1, len(d_fake), dis_block_layers):
             loss_G += ((d_fake[idx] - 1) ** 2).mean()
 
         loss_G *= lambda_gen
 
-        # get stft loss
-        stft_loss = get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
-        loss_G += stft_loss
+        # get multi-resolution stft loss
+        loss_G += get_spec_losses(pred, wav, stft_funcs_for_loss)[0]
 
         mb_generator.zero_grad()
         loss_G.backward()
         mb_opt.step()
         mb_scheduler.step()
-
 
         #
         # logging! save!
@@ -281,6 +301,11 @@ def main(meta_dir: str, save_dir: str,
             writer.add_scalar('train/loss_D', loss_D.item(), global_step=step)
             writer.add_scalar('train/mel_err', mel_err, global_step=step)
             if step % log_heavy_interval == 0:
+                target_mel = imshow_to_buf(mel[0].detach().cpu().numpy())
+                pred_mel = imshow_to_buf(norm_mel(mel_func(pred[:1, 0]))[0].detach().cpu().numpy())
+
+                writer.add_image('train/target_mel', target_mel, global_step=step)
+                writer.add_image('train/pred_mel', pred_mel, global_step=step)
                 writer.add_audio('train/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
                 writer.add_audio('train/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
 
@@ -326,6 +351,7 @@ def main(meta_dir: str, save_dir: str,
                     d_real = discriminator(wav.unsqueeze(1))
 
                     loss_D = 0
+
                     for idx in range(dis_block_layers - 1, len(d_fake_det), dis_block_layers):
                         loss_D += torch.mean((d_fake_det[idx] - 1) ** 2)
 
@@ -364,12 +390,16 @@ def main(meta_dir: str, save_dir: str,
             # log writer
             pred_audio = pred[0, 0]
             target_audio = wav[0]
+            target_mel = imshow_to_buf(mel[0].detach().cpu().numpy())
+            pred_mel = imshow_to_buf(norm_mel(mel_func(pred[:1, 0]))[0].detach().cpu().numpy())
+
+            writer.add_image('valid/target_mel', target_mel, global_step=step)
+            writer.add_image('valid/pred_mel', pred_mel, global_step=step)
             writer.add_scalar('valid/loss_G', valid_g_loss, global_step=step)
             writer.add_scalar('valid/loss_D', valid_d_loss, global_step=step)
             writer.add_scalar('valid/mel_err', valid_mel_loss, global_step=step)
-            if step % log_heavy_interval == 0:
-                writer.add_audio('valid/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
-                writer.add_audio('valid/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+            writer.add_audio('valid/pred_audio', pred_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
+            writer.add_audio('valid/target_audio', target_audio, sample_rate=settings.SAMPLE_RATE, global_step=step)
 
             # console
             log(
@@ -385,26 +415,33 @@ def main(meta_dir: str, save_dir: str,
             save_checkpoint(
                 mb_generator, discriminator,
                 mb_opt, dis_opt,
+                mb_scheduler, dis_scheduler,
                 model_dir, step, valid_g_loss, is_best=is_best
             )
 
     log('----- Finish ! -----')
 
 
-def get_multi_resolution_params():
-    origin_samplerate = 16000
-    target_samplerate = settings.SAMPLE_RATE
-    ratio = target_samplerate / origin_samplerate
+# def get_multi_resolution_params():
+#     origin_samplerate = 16000
+#     target_samplerate = settings.SAMPLE_RATE
+#     ratio = target_samplerate / origin_samplerate
+#
+#     params_list = [
+#         [384, 150, 30], [683, 300, 60], [171, 60, 10]
+#     ]
+#
+#     result = [[int(p * ratio) for p in params] for params in params_list]
+#     return result
 
-    params_list = [
-        [384, 150, 30], [683, 300, 60], [171, 60, 10]
+
+def get_multi_resolution_params():
+    return [
+        [256, 256, 64], [512, 512, 128], [128, 128, 32]
     ]
 
-    result = [[int(p * ratio) for p in params] for params in params_list]
-    return result
 
-
-def build_mel_functions():
+def build_stft_functions():
     print('Build Mel Functions ...')
     params_for_loss = get_multi_resolution_params()
 
@@ -414,7 +451,7 @@ def build_mel_functions():
     mel_funcs_for_loss = [
         STFTTorchAudio(
             win, hop, win, fft
-        ) for fft, win, hop in params_for_loss
+        ).cuda() for fft, win, hop in params_for_loss
     ]
 
     mel_func = LogMelSpectrogram(
@@ -424,19 +461,19 @@ def build_mel_functions():
     return mel_func, mel_funcs_for_loss
 
 
-def get_spec_losses(pred: torch.Tensor, target: torch.Tensor, stft_funcs_for_loss):
+def get_spec_losses(pred: torch.Tensor, target: torch.Tensor, stft_funcs_for_loss, eps: float = 1e-5):
     loss, sc_loss, mag_loss = 0., 0., 0.
 
     for stft_idx, stft_func in enumerate(stft_funcs_for_loss):
         real, img = stft_func(pred.squeeze(1))
-        p_stft = torch.sqrt(real ** 2 + img ** 2 + 1e-5)
+        p_stft = torch.sqrt(real ** 2 + img ** 2 + eps)
 
         real, img = stft_func(target)
-        t_stft = torch.sqrt(real ** 2 + img ** 2 + 1e-5)
+        t_stft = torch.sqrt(real ** 2 + img ** 2 + eps)
 
-        N = target.size(-1)
-        sc_loss_ = ((torch.abs(t_stft) - torch.abs(p_stft)).norm(dim=1).norm(dim=1) / t_stft.norm(dim=1).norm(dim=1)).mean()
-        mag_loss_ = torch.norm(torch.log(torch.abs(t_stft) + 1e-5) - torch.log(torch.abs(p_stft) + 1e-5), p=1, dim=1).norm(p=1, dim=1).mean() / N
+        N = t_stft.size(1) * t_stft.size(2)
+        sc_loss_ = ((t_stft - p_stft).norm(dim=(1, 2)) / t_stft.norm(dim=(1, 2))).mean()
+        mag_loss_ = torch.norm(torch.log(t_stft + eps) - torch.log(p_stft + eps), p=1, dim=(1, 2)).mean() / N
 
         loss += sc_loss_ + mag_loss_
         sc_loss += sc_loss_
@@ -490,6 +527,7 @@ def prepare_logging(save_dir: str, save_prefix: str):
 def save_checkpoint(
         generator, discriminator,
         gen_opt, dis_opt,
+        gen_scheduler, dis_scheduler,
         out_dir: str, step: int, loss: float, is_best: bool = False
     ):
     # file path
@@ -500,6 +538,8 @@ def save_checkpoint(
         'discriminator': discriminator.state_dict(),
         'gen_opt': gen_opt.state_dict(),
         'dis_opt': dis_opt.state_dict(),
+        'gen_scheduler': gen_scheduler.state_dict(),
+        'dis_scheduler': dis_scheduler.state_dict(),
         'step': step,
         'loss': loss
     }
