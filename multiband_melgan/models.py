@@ -147,15 +147,14 @@ class Discriminator(nn.Module):
         return results
 
 
-# mel_dim: int, dim: int, out_dim: int, res_kernels
-# @register_model_architecture('generator', 'generator_mb')
-# def generator_mb():
-#     return {
-#         'mel_dim': 80,
-#         'dim': 384,
-#         'out_dim': 4,
-#         'res_kernels': [2, 5, 5]
-#     }
+@register_model_architecture('generator', 'generator_mb_16k')
+def generator_mb():
+    return {
+        'mel_dim': 80,
+        'dim': 384,
+        'out_dim': 4,
+        'res_kernels': [2, 5, 5]
+    }
 
 
 @register_model_architecture('generator', 'generator_mb')
@@ -165,16 +164,6 @@ def generator_mb():
         'dim': 384,
         'out_dim': 4,
         'res_kernels': [4, 4, 4]
-    }
-
-
-@register_model_architecture('generator', 'generator_full')
-def generator_full():
-    return {
-        'mel_dim': 80,
-        'dim': 512,
-        'out_dim': 1,
-        'res_kernels': [8, 5, 5]
     }
 
 

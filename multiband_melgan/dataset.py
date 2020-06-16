@@ -21,6 +21,7 @@ class AudioDataset(Dataset):
 
         # load audio
         wav, _ = librosa.load(file_path, sr=None)
+        # wav = librosa.effects.trim(wav)[0]
 
         # random crop
         rand_start = np.random.randint(0, (len(wav) - self.crop_length))
