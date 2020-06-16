@@ -1,1 +1,90 @@
 # Multi-Band MelGAN
+
+[![Python 3.7](https://img.shields.io/badge/python-3.7-blue.svg)](https://www.python.org/downloads/release/python-370/)
+
+It's an naive implementation of [Multi-band MelGAN: Faster Waveform Generation for High-Quality
+Text-to-Speech](https://arxiv.org/abs/2005.05106).
+
+*Under Developing*
+
+### Goals
+
+- Comparable Quality with other vocoders
+- Mobile Inference Example
+
+### TODO
+
+- [ ] Enhance vocoder quality.
+- [ ] Make inference code & example.
+- [ ] Make mobile example.
+
+### Prerequisite
+
+- install [pytorch_sound](https://github.com/appleholic/pytorch_sound)
+  - More detail about installation is on repository.
+```bash
+git clone -b v0.0.4 https://github.com/appleholic/pytorch_sound
+cd pytorch_sound
+pip install -e .
+```
+
+- Preprocess vctk
+  - After run it, you can find 'meta' directory in "OUT DIR"
+  - [Download Link](http://homepages.inf.ed.ac.uk/jyamagis/release/VCTK-Corpus.tar.gz) 
+```bash
+python pytorch_sound/scripts/preprocess.py vctk [VCTK DIR] [OUT DIR] [[Sample Rate: default 22.05k]]
+```
+
+- Install multiband melgan
+```bash
+pip install -e .
+```
+
+### Environment
+
+- Machine
+  - pytorch 1.5.0
+  - rtx titan 1 GPU / ryzen 3900x / 64GB
+- Dataset
+  - VCTK
+
+
+### Train
+
+```bash
+python multiband_melgan/train_mb.py [META DIR] [SAVE DIR] [SAVE PREFIX] [[other arguments...]]
+```
+
+### Example
+
+- To be updated
+
+### Reference
+
+- [descriptinc/melgan-neurips](https://github.com/descriptinc/melgan-neurips)
+- [kan-bayashi/ParallelWaveGAN](https://github.com/kan-bayashi/ParallelWaveGAN)
+
+### Others
+
+- Evaluation Score
+  - PESQ on validation set (VCTK)
+    - (mean : 2.28, std : 0.30) on 700k. v0.0.0
+  
+- Model
+  - multiband generator (22.05k) : 
+    - checkpoint file size : 4.7MB
+    - numb. parameters : 1236248
+  
+- Audio Parameters
+
+> - Sample Rate : 22.05k
+> - Window Length & fft : 1024
+> - Hop length : 256 
+> - Mel dim : 80
+> - Mel min/max : 0 / 8000
+> - DB min/max : -50 / 30
+> - Crop Size (in training) : 1s
+
+### Author
+
+Ilji Choi [\@appleholic](https://github.com/appleholic)
