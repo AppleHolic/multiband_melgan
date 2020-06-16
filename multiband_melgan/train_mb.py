@@ -10,7 +10,7 @@ from multiband_melgan.dataset import get_datasets
 from multiband_melgan.utils import repeat
 
 from typing import Tuple
-from pytorch_sound.models.transforms import LogMelSpectrogram, STFTTorchAudio
+from pytorch_sound.models.transforms import LogMelSpectrogram, STFT
 from pytorch_sound.utils.calculate import norm_mel
 from pytorch_sound.utils.plots import imshow_to_buf
 
@@ -283,7 +283,8 @@ def main(meta_dir: str, save_dir: str,
         loss_G *= lambda_gen
 
         # get multi-resolution stft loss
-        loss_G += get_spec_losses(pred, wav, stft_funcs_for_loss)[0]
+        loss_G += get_stft_loss(pred, wav, pred_subbands, target_subbands, stft_funcs_for_loss)[0]
+        # loss_G += get_spec_losses(pred, wav, stft_funcs_for_loss)[0]
 
         mb_generator.zero_grad()
         loss_G.backward()
@@ -422,35 +423,25 @@ def main(meta_dir: str, save_dir: str,
     log('----- Finish ! -----')
 
 
-# def get_multi_resolution_params():
-#     origin_samplerate = 16000
-#     target_samplerate = settings.SAMPLE_RATE
-#     ratio = target_samplerate / origin_samplerate
-#
-#     params_list = [
-#         [384, 150, 30], [683, 300, 60], [171, 60, 10]
-#     ]
-#
-#     result = [[int(p * ratio) for p in params] for params in params_list]
-#     return result
-
-
 def get_multi_resolution_params():
-    return [
-        [256, 256, 64], [512, 512, 128], [128, 128, 32]
+    origin_samplerate = 16000
+    target_samplerate = settings.SAMPLE_RATE
+    ratio = target_samplerate / origin_samplerate
+
+    params_list = [
+        [384, 150, 30], [683, 300, 60], [171, 60, 10]
     ]
+
+    result = [[int(p * ratio) for p in params] for params in params_list]
+    return result
 
 
 def build_stft_functions():
     print('Build Mel Functions ...')
     params_for_loss = get_multi_resolution_params()
-
-    # filter_length: int = 1024, hop_length: int = 512, win_length: int = None, n_fft: int = None,
-    # window: str = 'hann'):
-
     mel_funcs_for_loss = [
-        STFTTorchAudio(
-            win, hop, win, fft
+        STFT(
+            win, hop, win
         ).cuda() for fft, win, hop in params_for_loss
     ]
 
@@ -465,11 +456,8 @@ def get_spec_losses(pred: torch.Tensor, target: torch.Tensor, stft_funcs_for_los
     loss, sc_loss, mag_loss = 0., 0., 0.
 
     for stft_idx, stft_func in enumerate(stft_funcs_for_loss):
-        real, img = stft_func(pred.squeeze(1))
-        p_stft = torch.sqrt(real ** 2 + img ** 2 + eps)
-
-        real, img = stft_func(target)
-        t_stft = torch.sqrt(real ** 2 + img ** 2 + eps)
+        p_stft = stft_func.transform(pred.squeeze(1))[0]
+        t_stft = stft_func.transform(target)[0]
 
         N = t_stft.size(1) * t_stft.size(2)
         sc_loss_ = ((t_stft - p_stft).norm(dim=(1, 2)) / t_stft.norm(dim=(1, 2))).mean()
