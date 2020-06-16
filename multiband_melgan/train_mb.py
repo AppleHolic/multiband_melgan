@@ -4,18 +4,15 @@ import torch
 import os
 import numpy as np
 import torch.nn.functional as F
+from typing import Tuple
 
 from multiband_melgan import models
 from multiband_melgan.dataset import get_datasets
+from multiband_melgan.modules import LogMelSpectrogram, STFT
 from multiband_melgan.utils import repeat
-
-from typing import Tuple
-from pytorch_sound.models.transforms import LogMelSpectrogram, STFT
-from pytorch_sound.utils.calculate import norm_mel
+from multiband_melgan import settings
 from pytorch_sound.utils.plots import imshow_to_buf
-
 from pytorch_sound.models import build_model
-from pytorch_sound import settings
 from pytorch_sound.models.transforms import PQMF
 from pytorch_sound.utils.commons import log
 from tensorboardX import SummaryWriter
@@ -106,7 +103,7 @@ def main(meta_dir: str, save_dir: str,
         wav = wav.cuda()
 
         # to mel
-        mel = norm_mel(mel_func(wav))
+        mel = mel_func(wav)
 
         # pqmf
         target_subbands = pqmf_func.analysis(wav.unsqueeze(1))  # N, SUBBAND, T
@@ -161,7 +158,7 @@ def main(meta_dir: str, save_dir: str,
             for idx, (wav, _) in enumerate(valid_loader):
                 # setup data
                 wav = wav.cuda()
-                mel = norm_mel(mel_func(wav))
+                mel = mel_func(wav)
 
                 with torch.no_grad():
                     # pqmf
@@ -230,7 +227,7 @@ def main(meta_dir: str, save_dir: str,
         wav = wav.cuda()
 
         # to mel
-        mel = norm_mel(mel_func(wav))
+        mel = mel_func(wav)
 
         # pqmf
         target_subbands = pqmf_func.analysis(wav.unsqueeze(1))  # N, SUBBAND, T
@@ -248,7 +245,7 @@ def main(meta_dir: str, save_dir: str,
         pred, wav = match_dim(pred, wav)
 
         with torch.no_grad():
-            pred_mel = norm_mel(mel_func(pred.squeeze(1).detach()))
+            pred_mel = mel_func(pred.squeeze(1).detach())
             mel_err = F.l1_loss(mel, pred_mel).item()
 
         # if terminate_step > step:
@@ -303,7 +300,7 @@ def main(meta_dir: str, save_dir: str,
             writer.add_scalar('train/mel_err', mel_err, global_step=step)
             if step % log_heavy_interval == 0:
                 target_mel = imshow_to_buf(mel[0].detach().cpu().numpy())
-                pred_mel = imshow_to_buf(norm_mel(mel_func(pred[:1, 0]))[0].detach().cpu().numpy())
+                pred_mel = imshow_to_buf(mel_func(pred[:1, 0])[0].detach().cpu().numpy())
 
                 writer.add_image('train/target_mel', target_mel, global_step=step)
                 writer.add_image('train/pred_mel', pred_mel, global_step=step)
@@ -327,7 +324,7 @@ def main(meta_dir: str, save_dir: str,
             for idx, (wav, _) in enumerate(valid_loader):
                 # setup data
                 wav = wav.cuda()
-                mel = norm_mel(mel_func(wav))
+                mel = mel_func(wav)
 
                 with torch.no_grad():
                     # pqmf
@@ -342,7 +339,7 @@ def main(meta_dir: str, save_dir: str,
                     pred, wav = match_dim(pred, wav)
 
                     # Mel Error
-                    pred_mel = norm_mel(mel_func(pred.squeeze(1).detach()))
+                    pred_mel = mel_func(pred.squeeze(1).detach())
                     mel_err = F.l1_loss(mel, pred_mel).item()
 
                     #
@@ -392,7 +389,7 @@ def main(meta_dir: str, save_dir: str,
             pred_audio = pred[0, 0]
             target_audio = wav[0]
             target_mel = imshow_to_buf(mel[0].detach().cpu().numpy())
-            pred_mel = imshow_to_buf(norm_mel(mel_func(pred[:1, 0]))[0].detach().cpu().numpy())
+            pred_mel = imshow_to_buf(mel_func(pred[:1, 0])[0].detach().cpu().numpy())
 
             writer.add_image('valid/target_mel', target_mel, global_step=step)
             writer.add_image('valid/pred_mel', pred_mel, global_step=step)
@@ -424,16 +421,9 @@ def main(meta_dir: str, save_dir: str,
 
 
 def get_multi_resolution_params():
-    origin_samplerate = 16000
-    target_samplerate = settings.SAMPLE_RATE
-    ratio = target_samplerate / origin_samplerate
-
-    params_list = [
-        [384, 150, 30], [683, 300, 60], [171, 60, 10]
+    return [
+        [512, 256, 64], [1024, 512, 128], [256, 128, 32]
     ]
-
-    result = [[int(p * ratio) for p in params] for params in params_list]
-    return result
 
 
 def build_stft_functions():
@@ -441,13 +431,13 @@ def build_stft_functions():
     params_for_loss = get_multi_resolution_params()
     mel_funcs_for_loss = [
         STFT(
-            win, hop, win
+            win, hop, win, fft
         ).cuda() for fft, win, hop in params_for_loss
     ]
 
     mel_func = LogMelSpectrogram(
         settings.SAMPLE_RATE, settings.MEL_SIZE, settings.WIN_LENGTH, settings.WIN_LENGTH, settings.HOP_LENGTH,
-        float(settings.MIN_DB), float(settings.MAX_DB), float(settings.MEL_MIN), float(settings.MEL_MAX)
+        float(settings.MEL_MIN), float(settings.MEL_MAX)
     ).cuda()
     return mel_func, mel_funcs_for_loss
 
