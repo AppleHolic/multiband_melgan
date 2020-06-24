@@ -1,6 +1,6 @@
 # Multi-Band MelGAN
 
-[![Python 3.7](https://img.shields.io/badge/python-3.7-blue.svg)](https://www.python.org/downloads/release/python-370/)
+[![Python 3.7](https://img.shields.io/badge/python-3.7-blue.svg)](https://www.python.org/downloads/release/python-370/) [![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2Fappleholic%2Fmultiband_melgan)](https://hits.seeyoufarm.com)
 
 It's an naive implementation of [Multi-band MelGAN: Faster Waveform Generation for High-Quality
 Text-to-Speech](https://arxiv.org/abs/2005.05106).
