@@ -52,7 +52,7 @@ pip install -e .
 ### Train
 
 ```bash
-python multiband_melgan/train_mb.py [META DIR] [SAVE DIR] [SAVE PREFIX] [[other arguments...]]
+python multiband_melgan/train_mb.py run [META DIR] [SAVE DIR] [SAVE PREFIX] [[other arguments...]]
 ```
 
 ### Example
