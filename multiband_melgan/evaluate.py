@@ -1,16 +1,17 @@
 import fire
 import numpy as np
 import torch
-from torchaudio.transforms import Resample
-from multiband_melgan.train_mb import match_dim
-from pytorch_sound.utils.calculate import norm_mel
+
 from tqdm import tqdm
-from multiband_melgan.dataset import get_datasets
 from pesq import pesq
-from pytorch_sound import settings
+from multiband_melgan.train_mb import match_dim
+from multiband_melgan.dataset import get_datasets
+from multiband_melgan import settings
+from multiband_melgan.modules import LogMelSpectrogram
 from pytorch_sound.models import build_model
-from pytorch_sound.models.transforms import LogMelSpectrogram, PQMF
+from pytorch_sound.models.transforms import PQMF
 from pytorch_sound.utils.commons import get_loadable_checkpoint
+from torchaudio.transforms import Resample
 
 
 def load_model(model_name: str, pretrained_path: str) -> torch.nn.Module:
@@ -32,7 +33,7 @@ def main(meta_dir: str, pretrained_path: str, model_name: str = 'generator_mb'):
     # make mel func
     mel_func = LogMelSpectrogram(
         settings.SAMPLE_RATE, settings.MEL_SIZE, settings.WIN_LENGTH, settings.WIN_LENGTH, settings.HOP_LENGTH,
-        float(settings.MIN_DB), float(settings.MAX_DB), float(settings.MEL_MIN), float(settings.MEL_MAX)
+        float(settings.MEL_MIN), float(settings.MEL_MAX)
     ).cuda()
 
     pqmf_func = PQMF().cuda()
@@ -51,7 +52,7 @@ def main(meta_dir: str, pretrained_path: str, model_name: str = 'generator_mb'):
         wav = wav.cuda()
 
         # to mel
-        mel = norm_mel(mel_func(wav))
+        mel = mel_func(wav)
 
         with torch.no_grad():
             pred_subbands = gen(mel)
