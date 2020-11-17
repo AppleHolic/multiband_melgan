@@ -8,9 +8,10 @@ from typing import Tuple
 
 from multiband_melgan import models
 from multiband_melgan.dataset import get_datasets
-from multiband_melgan.modules import LogMelSpectrogram, STFT
 from multiband_melgan.utils import repeat
 from multiband_melgan import settings
+from multiband_melgan.modules import MelSpectrogramOther as LogMelSpectrogram
+from pytorch_sound.models.transforms import STFT
 from pytorch_sound.utils.plots import imshow_to_buf
 from pytorch_sound.models import build_model
 from pytorch_sound.models.transforms import PQMF
@@ -220,7 +221,7 @@ def main(meta_dir: str, save_dir: str,
     lambda_gen = 2.5
     best_loss = np.finfo(np.float32).max
 
-    for step in range(max(pretrain_step, initial_step), max_step):
+    for step in range(max(pretrain_step, initial_step), max_step + 1):
 
         # data
         wav, _ = next(train_loader)
@@ -420,24 +421,25 @@ def main(meta_dir: str, save_dir: str,
     log('----- Finish ! -----')
 
 
-def get_multi_resolution_params():
-    return [
-        [512, 256, 64], [1024, 512, 128], [256, 128, 32]
-    ]
+FB_STFT_PARAMS = [
+    [1024, 600, 120], [2048, 1200, 240], [512, 240, 50]
+]
+MB_STFT_PARAMS = [
+    [384, 30, 150], [683, 60, 300], [171, 10, 60]
+]
 
 
 def build_stft_functions():
     print('Build Mel Functions ...')
-    params_for_loss = get_multi_resolution_params()
     mel_funcs_for_loss = [
         STFT(
-            win, hop, win, fft
-        ).cuda() for fft, win, hop in params_for_loss
+            fft, hop, win
+        ).cuda() for fft, win, hop in FB_STFT_PARAMS + MB_STFT_PARAMS
     ]
 
     mel_func = LogMelSpectrogram(
         settings.SAMPLE_RATE, settings.MEL_SIZE, settings.WIN_LENGTH, settings.WIN_LENGTH, settings.HOP_LENGTH,
-        float(settings.MEL_MIN), float(settings.MEL_MAX)
+        mel_min=float(settings.MEL_MIN), mel_max=float(settings.MEL_MAX)
     ).cuda()
     return mel_func, mel_funcs_for_loss
 
@@ -461,12 +463,15 @@ def get_spec_losses(pred: torch.Tensor, target: torch.Tensor, stft_funcs_for_los
 
 
 def get_stft_loss(pred, wav, pred_subband, target_subband, stft_funcs_for_loss):
+    fb_stft_funcs = stft_funcs_for_loss[:len(stft_funcs_for_loss) // 2]
+    mb_stft_funcs = stft_funcs_for_loss[len(stft_funcs_for_loss) // 2:]
+
     # calc full bank loss
-    fb_loss, fb_sc_loss, fb_mag_loss = get_spec_losses(pred, wav, stft_funcs_for_loss)
+    fb_loss, fb_sc_loss, fb_mag_loss = get_spec_losses(pred, wav, fb_stft_funcs)
 
     # calc multi bank losses
     T = pred_subband.size(-1)
-    mb_loss, mb_sc_loss, mb_mag_loss = get_spec_losses(pred_subband.view(-1, T), target_subband.view(-1, T), stft_funcs_for_loss)
+    mb_loss, mb_sc_loss, mb_mag_loss = get_spec_losses(pred_subband.view(-1, T), target_subband.view(-1, T), mb_stft_funcs)
 
     # final loss
     loss = (fb_loss + mb_loss) / 2  # eq. 9

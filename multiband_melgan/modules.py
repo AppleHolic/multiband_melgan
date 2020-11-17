@@ -1,7 +1,8 @@
+import librosa
 import torch
 import torch.nn as nn
-from torchaudio.functional import istft
 from torchaudio.transforms import MelSpectrogram
+from pytorch_sound.models.transforms import STFT as CustomSTFT
 
 
 class STFT(nn.Module):
@@ -50,7 +51,7 @@ class STFT(nn.Module):
         # match dimension
         magnitude, phase = magnitude.unsqueeze(3), phase.unsqueeze(3)
         stft = torch.cat([magnitude * torch.cos(phase), magnitude * torch.sin(phase)], dim=3)
-        return istft(
+        return torch.istft(
             stft, self.n_fft, self.hop_length, self.win_length, self.window
         )
 
@@ -74,3 +75,31 @@ class LogMelSpectrogram(nn.Module):
 
         # to log-space
         return torch.log10(mel + eps)
+
+
+#
+# Mel Spec Module
+#
+class MelSpectrogramOther(nn.Module):
+
+    def __init__(self, sample_rate: int, mel_size: int, n_fft: int, win_length: int,
+                 hop_length: int, mel_min: float = 0., mel_max: float = None):
+        super().__init__()
+        self.mel_size = mel_size
+
+        self.stft = STFT(filter_length=n_fft, hop_length=hop_length, win_length=win_length)
+
+        # mel filter banks
+        mel_filter = librosa.filters.mel(sample_rate, n_fft, mel_size, fmin=mel_min, fmax=mel_max)
+        self.register_buffer('mel_filter',
+                             torch.tensor(mel_filter, dtype=torch.float))
+
+    def forward(self, wav: torch.tensor, eps: float = 1e-10) -> torch.tensor:
+        mag, phase = self.stft.transform(wav)
+
+        # apply mel filter
+        mel = torch.matmul(self.mel_filter, mag)
+
+        # to log-space
+        mel = torch.log10(mel.clamp_min(eps))
+        return mel
