@@ -1,5 +1,6 @@
 SAMPLE_RATE: int = 22050  # sample rate of target wave
 WIN_LENGTH: int = 1024  # STFT window length
+N_FFT: int = 1024
 HOP_LENGTH: int = 256  # STFT hop length
 HOP_STRIDE: int = WIN_LENGTH // HOP_LENGTH  # frames per window
 SPEC_SIZE: int = WIN_LENGTH // 2 + 1  # spectrogram bands
