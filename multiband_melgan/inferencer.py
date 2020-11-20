@@ -2,9 +2,9 @@ import os
 import torch
 
 from multiband_melgan.models import Generator
-from multiband_melgan.modules import LogMelSpectrogram
+from multiband_melgan.modules import LogMelSpectrogram2 as LogMelSpectrogram
 from multiband_melgan import settings
-from pytorch_sound.models.transforms import PQMF, STFTTorchAudio
+from pytorch_sound.models.transforms import PQMF, STFT
 
 #
 # first base vctk mb-melgan
@@ -39,26 +39,26 @@ class Inferencer:
         pred_wav = inferencer.decode(mel)
     """
 
-    def __init__(self):
+    def __init__(self, device: str = 'cuda'):
         # make mel converter
         self.mel_func = LogMelSpectrogram(
-            settings.SAMPLE_RATE, settings.MEL_SIZE, settings.WIN_LENGTH, settings.WIN_LENGTH, settings.HOP_LENGTH,
+            settings.SAMPLE_RATE, settings.MEL_SIZE, settings.N_FFT, settings.WIN_LENGTH, settings.HOP_LENGTH,
             float(settings.MEL_MIN), float(settings.MEL_MAX)
         ).cuda()
 
         # PQMF module
-        self.pqmf_func = PQMF().cuda()
+        self.pqmf_func = PQMF().to(device)
 
         # load model
-        self.gen = Generator().cuda()
-        chk = torch.load(VCTK_BASE_CHK_PATH)['generator']
+        self.gen = Generator().to(device)
+        chk = torch.load(VCTK_BASE_CHK_PATH, map_location=torch.device(device))['generator']
         self.gen.load_state_dict(chk)
         self.gen.eval()
 
-        self.stft = STFTTorchAudio(settings.WIN_LENGTH, settings.HOP_LENGTH).cuda()
+        self.stft = STFT(settings.WIN_LENGTH, settings.HOP_LENGTH).to(device)
 
         # denoise - reference https://github.com/NVIDIA/waveglow/blob/master/denoiser.py
-        mel_input = torch.zeros((1, 80, 88)).float().cuda()
+        mel_input = torch.zeros((1, 80, 88)).float().to(device)
         with torch.no_grad():
             bias_audio = self.decode(mel_input, is_denoise=False).squeeze(1)
             bias_spec, _ = self.stft.transform(bias_audio)
@@ -74,7 +74,7 @@ class Inferencer:
         if len(wav_tensor.size()) == 1:
             wav_tensor = wav_tensor.unsqueeze(0)
         assert len(wav_tensor.size()) <= 2, 'The expected dimension of wav is 1 or 2'
-        return self.mel_func(wav_tensor.cuda())
+        return self.mel_func(wav_tensor)
 
     def decode(self, mel_tensor: torch.Tensor, is_denoise: bool = True) -> torch.Tensor:
         """
