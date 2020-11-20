@@ -40,11 +40,13 @@ class Inferencer:
     """
 
     def __init__(self, device: str = 'cuda'):
+        self.device = device
+
         # make mel converter
         self.mel_func = LogMelSpectrogram(
             settings.SAMPLE_RATE, settings.MEL_SIZE, settings.N_FFT, settings.WIN_LENGTH, settings.HOP_LENGTH,
             float(settings.MEL_MIN), float(settings.MEL_MAX)
-        ).cuda()
+        ).to(device)
 
         # PQMF module
         self.pqmf_func = PQMF().to(device)
@@ -95,7 +97,7 @@ class Inferencer:
         return pred
 
     def denoise(self, audio: torch.Tensor, strength: float = 0.1) -> torch.Tensor:
-        audio_spec, audio_angles = self.stft.transform(audio.cuda().float())
+        audio_spec, audio_angles = self.stft.transform(audio.to(self.device).float())
         audio_spec_denoised = audio_spec - self.bias_spec * strength
         audio_spec_denoised = torch.clamp(audio_spec_denoised, 0.0)
         audio_denoised = self.stft.inverse(audio_spec_denoised, audio_angles)
