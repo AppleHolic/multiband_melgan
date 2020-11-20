@@ -12,7 +12,7 @@ def get_requirements(filename='requirements.txt'):
 
 setup(
     name="multiband_melgan",
-    version="0.0.0",
+    version="0.0.1",
     description="multi-band melgan",
     author="ILJI CHOI",
     author_email="choiilji@gmail.com",
