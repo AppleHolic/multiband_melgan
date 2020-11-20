@@ -2,7 +2,7 @@ import os
 import torch
 from pytorch_sound.models.transforms import STFT, PQMF
 from multiband_melgan import settings
-from multiband_melgan.modules import MelSpectrogramOther as LogMelSpectrogram
+from multiband_melgan.modules import LogMelSpectrogram2 as LogMelSpectrogram
 from parallel_wavegan.utils import download_pretrained_model
 from parallel_wavegan.utils import load_model
 
@@ -43,7 +43,7 @@ class Inferencer:
         # make mel converter
         self.mel_func = LogMelSpectrogram(
             settings.SAMPLE_RATE, settings.MEL_SIZE, settings.N_FFT, settings.WIN_LENGTH, settings.HOP_LENGTH,
-            float(settings.MEL_MIN), float(settings.MEL_MAX)
+            float(settings.MEL_MIN), float(settings.MEL_MAX), normalize=False
         ).cuda()
 
         # PQMF module
