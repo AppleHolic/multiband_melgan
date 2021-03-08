@@ -27,6 +27,11 @@ class AudioDataset(Dataset):
         rand_start = np.random.randint(0, (len(wav) - self.crop_length))
         cropped_wav = wav[rand_start:rand_start + self.crop_length]
 
+        # crop on voiced part
+        while np.abs(cropped_wav).max() < 0.05 and np.random.randint(5):
+            rand = np.random.randint(0, max(len(wav) - 1 - self.crop_length, 1))
+            cropped_wav = wav[rand:rand + self.crop_length]
+
         # make mask
         wav_mask = np.ones_like(cropped_wav)
 
