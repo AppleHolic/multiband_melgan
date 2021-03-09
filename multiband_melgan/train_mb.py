@@ -11,10 +11,9 @@ from multiband_melgan.dataset import get_datasets
 from multiband_melgan.utils import repeat
 from multiband_melgan import settings
 from multiband_melgan.modules import LogMelSpectrogram2 as LogMelSpectrogram
-from pytorch_sound.models.transforms import STFT
+from pytorch_sound.models.transforms import STFT, PQMF
 from pytorch_sound.utils.plots import imshow_to_buf
 from pytorch_sound.models import build_model
-from pytorch_sound.models.transforms import PQMF
 from pytorch_sound.utils.commons import log
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR

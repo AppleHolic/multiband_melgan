@@ -5,18 +5,17 @@
 It's an naive implementation of [Multi-band MelGAN: Faster Waveform Generation for High-Quality
 Text-to-Speech](https://arxiv.org/abs/2005.05106).
 
-*Under Developing*
+#### Fix and complete implementation. Mobile example will be released together with my result of vocoder research.
 
 ### Goals
 
 - Comparable Quality with other vocoders
 - Mobile Inference Example
 
-### TODO
+### TODOs
 
 - [x] Make inference code & example.
-- [ ] Enhance vocoder quality.
-- [ ] Make mobile example.
+- [x] Enhance vocoder quality.
 
 ### Prerequisite
 
@@ -86,12 +85,12 @@ pred_wav = inf.decode(mel, is_denoise=True)  # (N, Tw)
 
 - Evaluation Score
   - PESQ on validation set (VCTK)
-    - (mean : 2.5367, std : 0.3372) on multi-band melgan 1000k. 
+    - (mean : Update soon., std : -) on multi-band melgan 1000k. 
   
 - Model
   - multiband generator (22.05k) : 
-    - checkpoint file size : 4.7MB
-    - numb. parameters : 1236248
+    - checkpoint file size : Update soon.
+    - numb. parameters : Update soon.
   
 - Audio Parameters
 
@@ -100,7 +99,7 @@ pred_wav = inf.decode(mel, is_denoise=True)  # (N, Tw)
 > - Hop length : 256 
 > - Mel dim : 80
 > - Mel min/max : 80 / 7600
-> - Crop Size (in training) : 1s
+> - Crop Size (in training) : 8192 samples
 
 ### Author
 
