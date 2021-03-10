@@ -47,7 +47,7 @@ class ResnetBlock(nn.Module):
 @register_model('generator')
 class Generator(nn.Module):
 
-    def __init__(self, mel_dim: int = 80, dim: int = 384, out_dim: int = 4, res_kernels: List[int] = [4, 4, 4]):
+    def __init__(self, mel_dim: int = 80, dim: int = 384, out_dim: int = 4, res_kernels: List[int] = [2, 4, 8]):
         super().__init__()
         # make in conv
         self.in_conv = nn.Sequential(
@@ -58,7 +58,7 @@ class Generator(nn.Module):
         # body
         self.res_stack = nn.ModuleList()
         self.res_params = res_kernels
-        res_dilations = [3 ** idx for idx in range(4)]
+        res_dilations = [3 ** i for i in range(4)]
 
         for idx, ratio in enumerate(self.res_params):
             stack = nn.Sequential(
@@ -71,7 +71,7 @@ class Generator(nn.Module):
                     padding=ratio // 2 + ratio % 2,
                     output_padding=ratio % 2,
                 ),
-                *[ResnetBlock(dim // 2, 3, dilation=res_dilations[idx])] * 4
+                *[ResnetBlock(dim // 2, 3, dilation=res_dilations[i]) for i in range(4)]
             )
             self.res_stack.append(stack)
 
@@ -163,7 +163,7 @@ def generator_mb():
         'mel_dim': 80,
         'dim': 384,
         'out_dim': 4,
-        'res_kernels': [4, 4, 4]
+        'res_kernels': [2, 4, 8]
     }
 
 

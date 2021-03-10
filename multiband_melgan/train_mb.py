@@ -11,10 +11,9 @@ from multiband_melgan.dataset import get_datasets
 from multiband_melgan.utils import repeat
 from multiband_melgan import settings
 from multiband_melgan.modules import LogMelSpectrogram2 as LogMelSpectrogram
-from pytorch_sound.models.transforms import STFT
+from pytorch_sound.models.transforms import STFT, PQMF
 from pytorch_sound.utils.plots import imshow_to_buf
 from pytorch_sound.models import build_model
-from pytorch_sound.models.transforms import PQMF
 from pytorch_sound.utils.commons import log
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import MultiStepLR
@@ -22,11 +21,12 @@ from torch.optim.lr_scheduler import MultiStepLR
 
 def main(meta_dir: str, save_dir: str,
          save_prefix: str, pretrained_path: str = '',
-         batch_size: int = 32, num_workers: int = 8,
+         batch_size: int = 16, num_workers: int = 8,
          lr: float = 1e-4, betas: Tuple[float, float] = (0.5, 0.9), weight_decay: float = 0.0,
          pretrain_step: int = 200000,
          max_step: int = 1000000, save_interval: int = 10000,
          log_scala_interval: int = 20, log_heavy_interval: int = 1000,
+         crop_len: int = 8192,
          gamma: float = 0.5, seed: int = 1234):
     #
     # prepare training
@@ -47,7 +47,7 @@ def main(meta_dir: str, save_dir: str,
 
     # get datasets
     train_loader, valid_loader = get_datasets(
-        meta_dir, batch_size=batch_size, num_workers=num_workers, crop_length=settings.SAMPLE_RATE, random_seed=seed
+        meta_dir, batch_size=batch_size, num_workers=num_workers, crop_length=crop_len, random_seed=seed
     )
 
     # repeat

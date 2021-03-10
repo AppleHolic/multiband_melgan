@@ -53,7 +53,7 @@ class Inferencer:
 
         # load model
         self.gen = Generator().to(device)
-        chk = torch.load(VCTK_BASE_CHK_PATH, map_location=torch.device(device))['generator']
+        chk = torch.load(VCTK_BASE_CHK_PATH, map_location=torch.device(device))
         self.gen.load_state_dict(chk)
         self.gen.eval()
 
@@ -85,6 +85,7 @@ class Inferencer:
         :param is_denoise: using denoise function
         :return: wav tensor (N, T)
         """
+        # TODO: Multiband-melgan returns noises from zero tensor. Get some tries on training time.
         # inference generator and pqmf
         with torch.no_grad():
             pred = self.gen(mel_tensor)
