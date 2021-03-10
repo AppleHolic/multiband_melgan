@@ -47,7 +47,7 @@ class ResnetBlock(nn.Module):
 @register_model('generator')
 class Generator(nn.Module):
 
-    def __init__(self, mel_dim: int = 80, dim: int = 384, out_dim: int = 4, res_kernels: List[int] = [4, 4, 4]):
+    def __init__(self, mel_dim: int = 80, dim: int = 384, out_dim: int = 4, res_kernels: List[int] = [2, 4, 8]):
         super().__init__()
         # make in conv
         self.in_conv = nn.Sequential(

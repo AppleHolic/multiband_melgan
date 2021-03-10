@@ -14,18 +14,20 @@ from pytorch_sound.utils.commons import get_loadable_checkpoint
 from torchaudio.transforms import Resample
 
 
-def load_model(model_name: str, pretrained_path: str) -> torch.nn.Module:
+def load_model(model_name: str, pretrained_path: str, key: str = 'generator') -> torch.nn.Module:
     print('Load model ...')
     model = build_model(model_name).cuda()
-    chk = torch.load(pretrained_path)['generator']
+    chk = torch.load(pretrained_path)
+    if key:
+        chk = chk['generator']
     model.load_state_dict(get_loadable_checkpoint(chk))
     model.eval()
     return model
 
 
-def main(meta_dir: str, pretrained_path: str, model_name: str = 'generator_mb'):
+def main(meta_dir: str, pretrained_path: str, load_key: str = '', model_name: str = 'generator_mb'):
     # load model
-    gen = load_model(model_name, pretrained_path).cuda()
+    gen = load_model(model_name, pretrained_path, load_key).cuda()
 
     print(gen)
     print(f'Numb. Parameters : {sum(p.numel() for p in gen.parameters() if p.requires_grad)}')
